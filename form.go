@@ -11,4 +11,5 @@ const (
 
 	defaultDelimiter = '.'
 	defaultEscape    = '\\'
+	defaultTagName   = "form"
 )

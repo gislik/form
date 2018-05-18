@@ -16,7 +16,7 @@ import (
 
 // NewDecoder returns a new form Decoder.
 func NewDecoder(r io.Reader) *Decoder {
-	return &Decoder{r, defaultDelimiter, defaultEscape, false, false}
+	return &Decoder{r, defaultDelimiter, defaultEscape, false, false, defaultTagName}
 }
 
 // Decoder decodes data from a form (application/x-www-form-urlencoded).
@@ -26,6 +26,7 @@ type Decoder struct {
 	e             rune
 	ignoreUnknown bool
 	ignoreCase    bool
+	tagName       string
 }
 
 // DelimitWith sets r as the delimiter used for composite keys by Decoder d and returns the latter; it is '.' by default.
@@ -37,6 +38,12 @@ func (d *Decoder) DelimitWith(r rune) *Decoder {
 // EscapeWith sets r as the escape used for delimiters (and to escape itself) by Decoder d and returns the latter; it is '\\' by default.
 func (d *Decoder) EscapeWith(r rune) *Decoder {
 	d.e = r
+	return d
+}
+
+// TagName sets the tag name to t; it is form by default.
+func (d *Decoder) TagName(t string) *Decoder {
+	d.tagName = t
 	return d
 }
 
@@ -166,7 +173,7 @@ func (d Decoder) decodeValue(v reflect.Value, x interface{}) {
 func (d Decoder) decodeStruct(v reflect.Value, x interface{}) {
 	t := v.Type()
 	for k, c := range getNode(x) {
-		if f, ok := findField(v, k, d.ignoreCase); !ok && k == "" {
+		if f, ok := findField(v, k, d.ignoreCase, d.tagName); !ok && k == "" {
 			panic(getString(x) + " cannot be decoded as " + t.String())
 		} else if !ok {
 			if !d.ignoreUnknown {

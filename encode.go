@@ -18,15 +18,16 @@ import (
 
 // NewEncoder returns a new form Encoder.
 func NewEncoder(w io.Writer) *Encoder {
-	return &Encoder{w, defaultDelimiter, defaultEscape, false}
+	return &Encoder{w, defaultDelimiter, defaultEscape, false, defaultTagName}
 }
 
 // Encoder provides a way to encode to a Writer.
 type Encoder struct {
-	w io.Writer
-	d rune
-	e rune
-	z bool
+	w       io.Writer
+	d       rune
+	e       rune
+	z       bool
+	tagName string
 }
 
 // DelimitWith sets r as the delimiter used for composite keys by Encoder e and returns the latter; it is '.' by default.
@@ -50,7 +51,7 @@ func (e *Encoder) KeepZeros(z bool) *Encoder {
 // Encode encodes dst as form and writes it out using the Encoder's Writer.
 func (e Encoder) Encode(dst interface{}) error {
 	v := reflect.ValueOf(dst)
-	n, err := encodeToNode(v, e.z)
+	n, err := encodeToNode(v, e.z, e.tagName)
 	if err != nil {
 		return err
 	}
@@ -68,7 +69,7 @@ func (e Encoder) Encode(dst interface{}) error {
 // EncodeToString encodes dst as a form and returns it as a string.
 func EncodeToString(dst interface{}) (string, error) {
 	v := reflect.ValueOf(dst)
-	n, err := encodeToNode(v, false)
+	n, err := encodeToNode(v, false, defaultTagName)
 	if err != nil {
 		return "", err
 	}
@@ -79,7 +80,7 @@ func EncodeToString(dst interface{}) (string, error) {
 // EncodeToValues encodes dst as a form and returns it as Values.
 func EncodeToValues(dst interface{}) (url.Values, error) {
 	v := reflect.ValueOf(dst)
-	n, err := encodeToNode(v, false)
+	n, err := encodeToNode(v, false, defaultTagName)
 	if err != nil {
 		return nil, err
 	}
@@ -87,16 +88,16 @@ func EncodeToValues(dst interface{}) (url.Values, error) {
 	return vs, nil
 }
 
-func encodeToNode(v reflect.Value, z bool) (n node, err error) {
+func encodeToNode(v reflect.Value, z bool, tagName string) (n node, err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			err = fmt.Errorf("%v", e)
 		}
 	}()
-	return getNode(encodeValue(v, z)), nil
+	return getNode(encodeValue(v, z, tagName)), nil
 }
 
-func encodeValue(v reflect.Value, z bool) interface{} {
+func encodeValue(v reflect.Value, z bool, tagName string) interface{} {
 	t := v.Type()
 	k := v.Kind()
 
@@ -108,20 +109,20 @@ func encodeValue(v reflect.Value, z bool) interface{} {
 
 	switch k {
 	case reflect.Ptr, reflect.Interface:
-		return encodeValue(v.Elem(), z)
+		return encodeValue(v.Elem(), z, tagName)
 	case reflect.Struct:
 		if t.ConvertibleTo(timeType) {
 			return encodeTime(v)
 		} else if t.ConvertibleTo(urlType) {
 			return encodeURL(v)
 		}
-		return encodeStruct(v, z)
+		return encodeStruct(v, z, tagName)
 	case reflect.Slice:
-		return encodeSlice(v, z)
+		return encodeSlice(v, z, tagName)
 	case reflect.Array:
-		return encodeArray(v, z)
+		return encodeArray(v, z, tagName)
 	case reflect.Map:
-		return encodeMap(v, z)
+		return encodeMap(v, z, tagName)
 	case reflect.Invalid, reflect.Uintptr, reflect.UnsafePointer, reflect.Chan, reflect.Func:
 		panic(t.String() + " has unsupported kind " + t.Kind().String())
 	default:
@@ -129,49 +130,49 @@ func encodeValue(v reflect.Value, z bool) interface{} {
 	}
 }
 
-func encodeStruct(v reflect.Value, z bool) interface{} {
+func encodeStruct(v reflect.Value, z bool, tagName string) interface{} {
 	t := v.Type()
 	n := node{}
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
-		k, oe := fieldInfo(f)
+		k, oe := fieldInfo(f, tagName)
 
 		if k == "-" {
 			continue
 		} else if fv := v.Field(i); oe && isEmptyValue(fv) {
 			delete(n, k)
 		} else {
-			n[k] = encodeValue(fv, z)
+			n[k] = encodeValue(fv, z, tagName)
 		}
 	}
 	return n
 }
 
-func encodeMap(v reflect.Value, z bool) interface{} {
+func encodeMap(v reflect.Value, z bool, tagName string) interface{} {
 	n := node{}
 	for _, i := range v.MapKeys() {
-		k := getString(encodeValue(i, z))
-		n[k] = encodeValue(v.MapIndex(i), z)
+		k := getString(encodeValue(i, z, tagName))
+		n[k] = encodeValue(v.MapIndex(i), z, tagName)
 	}
 	return n
 }
 
-func encodeArray(v reflect.Value, z bool) interface{} {
+func encodeArray(v reflect.Value, z bool, tagName string) interface{} {
 	n := node{}
 	for i := 0; i < v.Len(); i++ {
-		n[strconv.Itoa(i)] = encodeValue(v.Index(i), z)
+		n[strconv.Itoa(i)] = encodeValue(v.Index(i), z, tagName)
 	}
 	return n
 }
 
-func encodeSlice(v reflect.Value, z bool) interface{} {
+func encodeSlice(v reflect.Value, z bool, tagName string) interface{} {
 	t := v.Type()
 	if t.Elem().Kind() == reflect.Uint8 {
 		return string(v.Bytes()) // Encode byte slices as a single string by default.
 	}
 	n := node{}
 	for i := 0; i < v.Len(); i++ {
-		n[strconv.Itoa(i)] = encodeValue(v.Index(i), z)
+		n[strconv.Itoa(i)] = encodeValue(v.Index(i), z, tagName)
 	}
 	return n
 }
@@ -260,13 +261,13 @@ func canIndexOrdinally(v reflect.Value) bool {
 	return false
 }
 
-func fieldInfo(f reflect.StructField) (k string, oe bool) {
+func fieldInfo(f reflect.StructField, tagName string) (k string, oe bool) {
 	if f.PkgPath != "" { // Skip private fields.
 		return omittedKey, oe
 	}
 
 	k = f.Name
-	tag := f.Tag.Get("form")
+	tag := f.Tag.Get(tagName)
 	if tag == "" {
 		return k, oe
 	}
@@ -281,7 +282,7 @@ func fieldInfo(f reflect.StructField) (k string, oe bool) {
 	return k, oe
 }
 
-func findField(v reflect.Value, n string, ignoreCase bool) (reflect.Value, bool) {
+func findField(v reflect.Value, n string, ignoreCase bool, tagName string) (reflect.Value, bool) {
 	t := v.Type()
 	l := v.NumField()
 
@@ -294,7 +295,7 @@ func findField(v reflect.Value, n string, ignoreCase bool) (reflect.Value, bool)
 	// First try named fields.
 	for i := 0; i < l; i++ {
 		f := t.Field(i)
-		k, _ := fieldInfo(f)
+		k, _ := fieldInfo(f, tagName)
 		if k == omittedKey {
 			continue
 		} else if n == k {
@@ -312,7 +313,7 @@ func findField(v reflect.Value, n string, ignoreCase bool) (reflect.Value, bool)
 	// Then try anonymous (embedded) fields.
 	for i := 0; i < l; i++ {
 		f := t.Field(i)
-		k, _ := fieldInfo(f)
+		k, _ := fieldInfo(f, tagName)
 		if k == omittedKey || !f.Anonymous { // || k != "" ?
 			continue
 		}
@@ -326,7 +327,7 @@ func findField(v reflect.Value, n string, ignoreCase bool) (reflect.Value, bool)
 		if fk != reflect.Struct {
 			continue
 		}
-		if ev, ok := findField(fv, n, ignoreCase); ok {
+		if ev, ok := findField(fv, n, ignoreCase, tagName); ok {
 			return ev, true
 		}
 	}
